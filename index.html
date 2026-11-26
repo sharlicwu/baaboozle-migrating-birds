@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BaaBoozle · Migrating Birds</title>
+<style>
+/* ═══════════ THEME (same layout metrics as the frog edition) ═══════════ */
+:root{
+  --bg:#0b1c30; --panel:#102842; --gold:#ffd600; --cyan:#4cc9ff;
+  /* --bw / --cw are recomputed at runtime so the 5x3 board always fits the window */
+  --bw: min(1560px, max(320px, calc((100vh - 330px) * 2.1)));
+  --cw: calc((var(--bw) - 40px) / 5);
+  --reserve: 180px;
+}
+@media (max-width:900px){
+  :root{
+    --bw: min(100%, max(320px, calc((100vh - 355px) * 2.1)));
+    --cw: calc((var(--bw) - 20px) / 5);
+    --reserve: 225px;
+  }
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{height:100%}
+body{
+  background:var(--bg); color:#eaf3ff; min-height:100%; overflow-y:auto;
+  font-family:"Segoe UI", system-ui, -apple-system, Arial, sans-serif;
+  display:flex; flex-direction:column; align-items:center; gap:8px;
+  padding:8px 8px var(--reserve);   /* reserve = answer-bar space, nothing hides under it */
+}
+@media (max-width:900px){ body{ gap:6px; } }
+
+.players,.status,.board{ width:100%; max-width:var(--bw); }
+/* the header needs ~700px or its buttons wrap onto a 2nd row (which shrinks the board
+   and makes it wrap again): give the chrome a floor, the board keeps the height-capped --bw */
+.topbar,.players,.status{ width:100%; max-width:max(var(--bw), 700px); }
+
+/* ═══════════ TOPBAR ═══════════ */
+.topbar{
+  display:flex; align-items:center; justify-content:space-between;
+  flex-wrap:wrap; gap:8px; background:var(--panel);
+  border:2px solid #1d4670; border-radius:12px; padding:7px 12px;
+}
+.brand{font-size:clamp(14px,1.7vw,21px);font-weight:800;color:var(--gold);letter-spacing:.3px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.brand span{color:#eaf3ff}
+.tools{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.btn{
+  background:#17395f;color:#eaf3ff;border:2px solid #2d6da8;border-radius:9px;
+  padding:6px 12px;font-size:clamp(11px,1.3vw,14px);font-weight:700;cursor:pointer;
+  font-family:inherit;white-space:nowrap;
+}
+.btn:hover{border-color:var(--gold);color:var(--gold)}
+.btn.off{opacity:.55;border-color:#274b6e;color:#9fb8d1}
+select.btn{padding:6px 8px;background:#0e2a47;max-width:200px}
+option{background:#0e2a47;color:#eaf3ff}
+
+/* ═══════════ SCOREBOARD ═══════════ */
+.players{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+.team{
+  background:var(--panel);border:2px solid #1d4670;border-radius:10px;
+  padding:2px 4px;text-align:center;position:relative;min-width:0;
+}
+.team.turn{animation:blink 1s infinite}
+@keyframes blink{
+  0%,100%{box-shadow:0 0 0 2px #ffffff inset;background:#16324f}
+  50%{box-shadow:0 0 0 2px var(--gold) inset;background:#1d3d5f}
+}
+.team.lag{opacity:.5}
+.trow{display:flex;align-items:center;justify-content:center;gap:5px;min-width:0}
+.dot{width:11px;height:11px;border-radius:50%;flex:none;box-shadow:0 0 5px rgba(0,0,0,.5)}
+.nm{font-size:clamp(11px,2.2vw,17px);font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.arrow{display:none;font-size:13px;color:var(--gold);font-weight:900}
+.team.turn .arrow{display:inline}
+.trow2{display:flex;align-items:baseline;justify-content:center;gap:6px;margin-top:0;white-space:nowrap}
+.sc{font-size:clamp(14px,2vw,22px);font-weight:900;color:var(--gold);line-height:1;white-space:nowrap}
+.sc.pop{animation:pop .35s ease}
+@keyframes pop{0%{transform:scale(1)}40%{transform:scale(1.45);color:#fff}100%{transform:scale(1)}}
+.cn{font-size:clamp(9px,1.3vw,13px);color:#cfe6ff;font-weight:700;white-space:nowrap}
+
+/* ═══════════ STATUS ═══════════ (one line only — legend row removed) */
+.status{
+  background:var(--panel);border:2px solid #1d4670;border-radius:12px;
+  min-height:40px;display:flex;align-items:center;justify-content:center;
+  gap:14px;padding:6px 10px;text-align:center;
+  font-size:clamp(12px,1.6vw,17px);font-weight:700;
+}
+.status b{color:var(--gold)}
+.sline{width:100%;text-align:center}   /* single flex child: wraps at word boundaries, not per fragment */
+
+/* ═══════════ BOARD 5 × 3 ═══════════ */
+.board{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+@media (max-width:900px){ .board{gap:5px} }
+.card{position:relative;aspect-ratio:4/3;perspective:900px;cursor:pointer}
+.card.locked{cursor:default}
+.card-inner{
+  position:absolute;inset:0;transform-style:preserve-3d;
+  transition:transform .55s cubic-bezier(.25,.85,.3,1);
+}
+.card.flipped .card-inner{transform:rotateY(180deg)}   /* only the text face rotates */
+.face{
+  position:absolute;inset:0;border-radius:12px;border:3px solid #cbd5e1;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:2px;padding:6px;text-align:center;overflow:hidden;
+  backface-visibility:hidden;-webkit-backface-visibility:hidden;
+}
+@media (max-width:900px){ .face{border-radius:8px;border-width:2px;padding:3px} }
+/* ── light-yellow card back (identical for every team) ── */
+.back{
+  background:linear-gradient(160deg,#fffdf0 0%,#fff4b8 50%,#f9dd7a 100%);
+  color:#6b4e06;border-color:#fffbe0;box-shadow:0 4px 0 #d1a72c;
+}
+.back .num{font-size:clamp(16px,calc(var(--cw)*.42),42px);font-weight:900;line-height:1}
+.back .pick{font-size:clamp(9px,calc(var(--cw)*.14),17px);font-weight:800;font-style:italic;opacity:.85}
+/* ── word face ── */
+.front{transform:rotateY(180deg);background:#17191d;border-color:#cbd5e1;color:#fff}
+.front.q{border-color:var(--gold);box-shadow:0 0 12px rgba(255,214,0,.35) inset}
+.word{font-size:clamp(12px,calc(var(--cw)/5),34px);font-weight:900;line-height:1.05;
+  overflow-wrap:break-word;word-break:normal;hyphens:auto;max-width:100%}
+.tag{position:absolute;top:4px;left:6px;font-size:clamp(8px,calc(var(--cw)*.1),13px);
+  font-weight:800;color:#9fd8ff;letter-spacing:.5px}
+/* points badge on word cards (top-left slot — actions use it for their emoji) */
+.pts{position:absolute;top:4px;left:5px;font-size:clamp(8px,calc(var(--cw)*.13),15px);
+  font-weight:900;color:#ffd600;background:rgba(255,214,0,.12);border:1px solid rgba(255,214,0,.6);
+  border-radius:7px;padding:0 4px;line-height:1.35;letter-spacing:.2px}
+.act-emoji{font-size:clamp(16px,calc(var(--cw)*.3),38px);line-height:1}
+.act-name{font-size:clamp(9px,calc(var(--cw)*.12),15px);font-weight:900;line-height:1.1;overflow-wrap:anywhere}
+.tick{position:absolute;top:3px;right:6px;font-size:clamp(11px,calc(var(--cw)*.18),22px);display:none}
+/* completed cards: change background/color directly (no filter/opacity, frame stays vivid) */
+.card.done .front{background:#0a0b0d;border-color:#8f98a5;color:#cfd6de;box-shadow:none}
+.card.done.act .front{background:#22262c;border-color:#6b7482;color:#a8b1bc;box-shadow:none}
+.card.done .tick{display:block}
+.card.done{cursor:default}
+.card.hit .front{animation:hit .4s ease}
+@keyframes hit{0%{transform:rotateY(180deg) scale(1)}45%{transform:rotateY(180deg) scale(1.09)}100%{transform:rotateY(180deg) scale(1)}}
+
+/* ═══════════ ANSWER BAR (fixed bottom) ═══════════ */
+.bar{
+  position:fixed;left:0;right:0;bottom:0;z-index:60;display:none;
+  background:#0d2340;border-top:3px solid var(--gold);
+  padding:8px 10px;justify-content:center;align-items:center;gap:10px;flex-wrap:wrap;
+  box-shadow:0 -8px 24px rgba(0,0,0,.55);min-height:96px;
+}
+.bar.show{display:flex}
+.barinfo{font-size:clamp(12px,1.6vw,17px);font-weight:800;text-align:center;width:100%}
+.barinfo b{color:var(--gold)}
+.barinfo.good{color:#4ade80}
+.barinfo.bad{color:#ff8080}
+.opts{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;width:100%}
+.opt{
+  flex:1 1 240px;max-width:420px;min-width:0;background:#17395f;color:#eaf3ff;
+  border:2px solid #2d6da8;border-radius:11px;padding:9px 12px;
+  font-size:clamp(12px,1.5vw,17px);font-weight:700;line-height:1.25;
+  cursor:pointer;font-family:inherit;text-align:center;overflow-wrap:anywhere;
+}
+.opt:hover:not(:disabled){border-color:var(--gold);color:var(--gold)}
+.opt:disabled{cursor:default;opacity:1}
+.opt.right{background:#0f5132;border-color:#4ade80;color:#d7ffe6}
+.opt.wrong{background:#5c1b1b;border-color:#ff6b6b;color:#ffd9d9}
+.picker{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;width:100%}
+.pbtn{
+  border-radius:11px;border:2px solid rgba(255,255,255,.35);color:#fff;
+  padding:8px 12px;font-size:clamp(12px,1.5vw,16px);font-weight:900;cursor:pointer;
+  font-family:inherit;display:flex;align-items:center;gap:7px;min-width:96px;justify-content:center;
+}
+.pbtn:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 4px 12px rgba(0,0,0,.5)}
+.pbtn:disabled{opacity:.28;cursor:default}
+.hear{
+  background:#17395f;border:2px solid #2d6da8;border-radius:11px;color:#eaf3ff;
+  padding:8px 14px;font-size:clamp(12px,1.4vw,16px);font-weight:800;cursor:pointer;font-family:inherit;
+}
+.hear:hover{border-color:var(--gold);color:var(--gold)}
+.next{
+  background:var(--gold);color:#102842;border:none;border-radius:11px;
+  padding:9px 26px;font-size:clamp(14px,1.8vw,20px);font-weight:900;cursor:pointer;
+  font-family:inherit;box-shadow:0 4px 0 #b39b00;
+}
+.next:hover{transform:translateY(-2px)}
+.next:active{transform:translateY(2px);box-shadow:0 1px 0 #b39b00}
+
+/* ═══════════ RESULT MODAL ═══════════ */
+.modal{
+  position:fixed;inset:0;z-index:90;background:rgba(5,14,26,.94);
+  display:none;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:18px;
+}
+.modal.show{display:flex}
+.mbox{
+  background:var(--panel);border:3px solid var(--gold);border-radius:18px;
+  padding:18px 22px;width:min(560px,100%);max-height:92vh;overflow:auto;text-align:center;
+}
+.trophy{font-size:clamp(44px,9vw,80px);line-height:1}
+.winner{font-size:clamp(20px,4vw,34px);font-weight:900;color:var(--gold);margin-bottom:2px}
+.sub{font-size:clamp(12px,1.6vw,16px);color:#a9c8e6;margin-bottom:12px}
+.rank{display:flex;align-items:center;gap:10px;background:#0e2a47;border-radius:11px;
+  padding:8px 12px;margin-bottom:7px;border:2px solid #1d4670}
+.medal{font-size:20px;width:34px;text-align:center;flex:none}
+.rdot{width:14px;height:14px;border-radius:50%;flex:none}
+.rname{font-size:clamp(14px,2vw,19px);font-weight:900;flex:1;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rscore{font-size:clamp(13px,1.9vw,18px);font-weight:900;color:var(--gold)}
+.rcoin{font-size:clamp(11px,1.5vw,14px);color:#a9c8e6;min-width:62px;text-align:right}
+.mbtns{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:14px}
+.big{border-radius:12px;padding:12px 24px;font-size:clamp(14px,1.9vw,19px);font-weight:900;
+  cursor:pointer;font-family:inherit;border:none}
+.b1{background:var(--gold);color:#102842;box-shadow:0 4px 0 #b39b00}
+.b2{background:#17395f;color:#eaf3ff;border:2px solid #2d6da8}
+.big:hover{transform:translateY(-2px)}
+/* ═══════════ RESPONSIVE (kept last so every override wins over the base rules above) ═══════════ */
+/* ── medium (small laptop / PPT link window): moderate compaction, topbar stays 1 row ── */
+@media (max-width:900px){
+  .topbar{padding:5px 10px}
+  .brand{font-size:15px}
+  .btn{padding:5px 9px;font-size:12px}
+  select.btn{max-width:160px}
+  .team{padding:3px 3px}
+  .dot{width:9px;height:9px}
+  .trow{gap:4px}
+  .nm{font-size:clamp(10px,1.9vw,15px)}
+  .status{font-size:clamp(11px,1.9vw,15px);min-height:38px}
+}
+/* ── short window (real laptop browser: 1366x768 minus tabs/address bar ≈ 630px tall):
+      compact the header so it fits the board width — topbar never folds to a 2nd row ── */
+@media (max-height:860px) and (min-width:700px){
+  .topbar{padding:5px 10px;gap:6px}
+  .brand{font-size:14px}
+  .btn{padding:4px 7px;font-size:11.5px}
+  select.btn{max-width:118px}
+  .tools{gap:4px}
+  .status{min-height:36px}
+  body{gap:6px}
+}
+/* ── desktop widths: header items never wrap (brand ellipsizes instead of folding) ── */
+@media (min-width:700px){
+  .topbar{flex-wrap:nowrap}
+  .tools{flex-wrap:nowrap;flex-shrink:0}
+}
+/* ── narrow window (link opened from PPT / small screen): compact chrome, no wrapping ── */
+@media (max-width:700px){
+  .topbar{padding:5px 8px;gap:5px}
+  .brand{font-size:13px}
+  .tools{gap:4px}
+  .btn{padding:4px 8px;font-size:11px}
+  select.btn{max-width:140px;padding:4px 6px}
+  .players{gap:4px}
+  .team{padding:4px 2px}
+  .trow{gap:3px}
+  .dot{width:8px;height:8px}
+  .nm{font-size:clamp(9px,2.3vw,13px)}
+  .arrow{font-size:10px}
+  .trow2{gap:5px}
+  .status{font-size:clamp(10px,2.6vw,14px);min-height:34px;padding:5px 6px;gap:8px}
+  .bar{padding:8px 8px;min-height:80px}
+  .opt{padding:9px 10px}
+  .pbtn{padding:8px 10px;min-width:80px}
+  .next{padding:9px 20px}
+}
+@media (max-width:420px){
+  .brand{font-size:12px}
+  .nm{font-size:10px}
+  .btn{padding:4px 6px;font-size:10.5px}
+  select.btn{max-width:110px}
+}
+@media (max-width:360px){
+  .brand{font-size:11px}
+  .nm{font-size:9px}
+  .dot{width:7px;height:7px}
+  .trow{gap:2px}
+  .sc{font-size:13px}
+  .cn{font-size:9px}
+  select.btn{max-width:96px}
+  .tools{gap:3px}
+  .face{padding:2px}
+  .act-emoji{font-size:14px}
+  .act-name{font-size:8.5px}
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">🐦 BaaBoozle · <span id="themeName">Migrating Birds</span></div>
+  <div class="tools">
+    <button class="btn" id="btnRestart">Restart</button>
+    <button class="btn" id="btnSound">🔊 Sound: ON</button>
+    <button class="btn" id="btnVoice">🗣 Voice: ON</button>
+    <select class="btn" id="voiceSel" title="Choose an English voice"></select>
+  </div>
+</header>
+
+<section class="players" id="players"></section>
+<section class="status" id="status"><div class="sline" id="sline"></div></section>
+<main class="board" id="board"></main>
+
+<div class="bar" id="bar"></div>
+
+<div class="modal" id="modal">
+  <div class="mbox">
+    <div class="trophy">🏆</div>
+    <div class="winner" id="winnerLine"></div>
+    <div class="sub" id="winnerSub">Game over — final ranking</div>
+    <div id="rankList"></div>
+    <div class="mbtns">
+      <button class="big b1" id="btnAgain">▶ Play Again</button>
+      <button class="big b2" id="btnExit">✕ Exit</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ═══════════════ DATA ═══════════════ */
+const THEME = "Migrating Birds";   /* change this one string to rename the game */
+const WORDS = [                          /* 7 English cards — short definitions for grades 3-4 */
+  {en:"temperatures", def:"how hot or cold something is"},
+  {en:"migrating",    def:"moving to a new place to live"},
+  {en:"injured",      def:"hurt or badly wounded"},
+  {en:"in danger",    def:"in a place that is not safe"},
+  {en:"frozen",       def:"turned into ice because it is very cold"},
+  {en:"hatched",      def:"born from an egg"},
+  {en:"goslings",     def:"baby geese"}
+];
+const ACTIONS = [                         /* 8 function cards */
+  {kind:"steal",  emoji:"🐴", label:"Steal Points"},
+  {kind:"give",   emoji:"🎁", label:"Give Points"},
+  {kind:"swap",   emoji:"🔄", label:"Swap Scores"},
+  {kind:"virus",  emoji:"🦠", label:"Virus"},
+  {kind:"double", emoji:"⭐", label:"Double"},
+  {kind:"triple", emoji:"🔺", label:"Triple"},
+  {kind:"bomb",   emoji:"💣", label:"Bomb"},
+  {kind:"first",  emoji:"🥇", label:"First Place"}
+];
+const TEAMS = [
+  {name:"Mario",   color:"#ef4444", score:0, coins:0},
+  {name:"Abigail", color:"#3b82f6", score:0, coins:0},
+  {name:"Aaron",   color:"#22c55e", score:0, coins:0},
+  {name:"Chen",    color:"#a855f7", score:0, coins:0},
+  {name:"Junjun",  color:"#eab308", score:0, coins:0}
+];
+const MEDALS = ["🥇","🥈","🥉","4th","5th"];
+
+/* ═══════════════ STATE ═══════════════ */
+let deck = [], cur = 0, used = 0;
+let lock = false;      // true while a question / action is on screen (blocks flipping)
+let waiting = false;   // true after a wrong answer (blocks everything until Next ▶)
+let gameOver = false;
+let endTimer = null;    // pending end-of-game timer (cleared on reset)
+let q = null;          // current question object
+let soundOn = true, voiceOn = true;
+
+const $ = id => document.getElementById(id);
+const boardEl = $("board"), playersEl = $("players"), statusEl = $("status"),
+      barEl = $("bar"), modalEl = $("modal");
+const shuffle = a => { a=a.slice(); for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];} return a; };
+const esc = s => String(s).replace(/[&<>"']/g, m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
+
+/* ═══════════════ AUDIO (Web Audio API, no files) ═══════════════ */
+let AC = null;
+function ac(){
+  if(!AC){ try{ AC = new (window.AudioContext || window.webkitAudioContext)(); }catch(e){ return null; } }
+  if(AC.state === "suspended") AC.resume();
+  return AC;
+}
+function tone(freq, t0, dur, type, vol, slideTo){
+  const a = ac(); if(!a) return;
+  const o = a.createOscillator(), g = a.createGain(), t = a.currentTime + t0;
+  o.type = type || "sine";
+  o.frequency.setValueAtTime(freq, t);
+  if(slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(20, slideTo), t + dur);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(vol, t + 0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g); g.connect(a.destination);
+  o.start(t); o.stop(t + dur + 0.06);
+}
+function noise(t0, dur, vol, cut){
+  const a = ac(); if(!a) return;
+  const len = Math.max(1, Math.floor(a.sampleRate * dur));
+  const buf = a.createBuffer(1, len, a.sampleRate), d = buf.getChannelData(0);
+  for(let i=0;i<len;i++) d[i] = (Math.random()*2-1) * (1 - i/len);
+  const src = a.createBufferSource(); src.buffer = buf;
+  const f = a.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = cut || 900;
+  const g = a.createGain(); g.gain.value = vol;
+  src.connect(f); f.connect(g); g.connect(a.destination);
+  src.start(a.currentTime + t0);
+}
+function sfxClick(){ if(!soundOn) return; tone(680,0,.06,"square",.10); }
+function sfxCorrect(){ if(!soundOn) return; [523.25,659.25,783.99,1046.50].forEach((f,i)=>tone(f,i*.075,.22,"triangle",.17)); }
+function sfxWrong(){ if(!soundOn) return; tone(392,0,.24,"sawtooth",.15,300); tone(294,.22,.28,"sawtooth",.15,150); tone(147,.44,.42,"square",.12,90); }
+function sfxBig(){ if(!soundOn) return;
+  [130.81,261.63,523.25].forEach(f=>tone(f,0,.9,"sawtooth",.16));
+  [164.81,329.63,659.25].forEach(f=>tone(f,.12,.8,"square",.10));
+  noise(0,.35,.35,2400);
+  [659.25,783.99,1046.50,1318.5].forEach((f,i)=>tone(f,.45+i*.06,.3,"triangle",.16));
+}
+function sfxLucky(){ if(!soundOn) return; [783.99,987.77,1174.66].forEach((f,i)=>tone(f,i*.06,.2,"triangle",.15)); }
+function sfxTriple(){ if(!soundOn) return;                 /* 🔺 triple: rising 3-note power-up */
+  [523.25,659.25,783.99].forEach((f,i)=>tone(f,i*.08,.30,"triangle",.16));
+  noise(.24,.35,.25,3000);
+  [659.25,783.99,1046.50,1318.51,1567.98].forEach((f,i)=>tone(f,.26+i*.05,.32,"square",.09));
+  tone(1567.98,.48,.55,"sine",.13);
+}
+function sfxFirst(){ if(!soundOn) return;                          /* 🥇 take the lead: quick triumphant rise */
+  [523.25,659.25,783.99,1046.50].forEach((f,i)=>tone(f,i*.07,.35,"triangle",.17));
+  noise(.30,.40,.30,6000);
+  tone(1046.50,.30,.75,"sawtooth",.12);
+  [523.25,659.25,783.99,1046.50].forEach(f=>tone(f,.34,.70,"square",.06));
+}
+/* ── final-card vamp: starts the moment the LAST card flips (before it is finished),
+      loops as a tension pulse until the award fanfare takes over at the 4s pause ── */
+let finalVamp = null;
+function sfxFinalVamp(){
+  if(finalVamp || gameOver) return;
+  const beat = ()=>{
+    if(!soundOn) return;
+    tone(65.41,0,.22,"sine",.20,49);          /* heartbeat low   */
+    tone(65.41,.16,.18,"sine",.15,49);
+    tone(130.81,.34,.30,"triangle",.09);      /* root swell      */
+    noise(0,.10,.08,400);                     /* soft kick       */
+  };
+  beat();
+  finalVamp = setInterval(beat, 1000);
+}
+function stopFinalVamp(){ if(finalVamp){ clearInterval(finalVamp); finalVamp = null; } }
+function sfxSteal(){ if(!soundOn) return; tone(600,0,.7,"sine",.2,120); tone(300,.1,.65,"sine",.12,80); tone(150,.18,.5,"triangle",.14,60); }
+function sfxBomb(){ if(!soundOn) return;
+  noise(0,.55,.55,700); noise(.05,.4,.35,260);
+  [92,62,44,29].forEach((f,i)=>tone(f,0,.55+i*.05,"sine",.30,f*0.55));
+  tone(180,0,.18,"square",.20,50);
+}
+function sfxVirus(){ if(!soundOn) return;                 /* 🦠 everyone drops to 0: sickly wobble */
+  tone(880,0,.55,"sawtooth",.11,110);
+  tone(440,.06,.60,"square",.07,70);
+  noise(.12,.45,.16,1400);
+  [233.08,220,207.65,196].forEach((f,i)=>tone(f,.40+i*.10,.24,"triangle",.13));
+  tone(98,.40,.85,"sine",.18,49);
+}
+let fanfareStarted = false;   /* award music plays once per game (the last-card answer may start it early) */
+function sfxFanfare(){ if(!soundOn || fanfareStarted) return; fanfareStarted = true;
+  /* ── award music: plays THROUGH the 4s final pause, climax lands just before the reveal ── */
+  for(let i=0;i<12;i++) noise(i*.035,.05,.04 + i*.010,2400);            /* drum roll 0–0.42s */
+  const mel = [
+    [523.25,0.45,.20],[523.25,0.65,.20],[523.25,0.85,.20],              /* C  C  C  */
+    [783.99,1.05,.40],                                                  /* G        */
+    [880.00,1.45,.20],[783.99,1.65,.20],[880.00,1.85,.20],              /* A  G  A  */
+    [783.99,2.05,.35],                                                  /* G        */
+    [659.25,2.45,.18],[783.99,2.63,.18],                                /* E  G     */
+    [1046.50,2.81,.45],                                                 /* high C   */
+    [783.99,3.35,.13],[880.00,3.48,.13],[987.77,3.61,.13],              /* rising run */
+    [1046.50,3.80,1.30]                                                 /* final hit — modal pops at 4.0s */
+  ];
+  mel.forEach(n=>{
+    tone(n[0],n[1],n[2],"sawtooth",.14);                /* brass lead    */
+    tone(n[0]*1.005,n[1],n[2],"square",.05);            /* detune shimmer */
+    tone(n[0]/2,n[1],n[2],"triangle",.10);              /* octave below   */
+  });
+  [0.45,0.85,1.25,1.65,2.05,2.45,2.85,3.25,3.65].forEach((t,i)=>{  /* march bass + kick */
+    tone(i%2?98.00:65.41,t,.30,"triangle",.15);
+    tone(120,t,.10,"sine",.20,55);
+  });
+  noise(3.80,.9,.18,7000);                                          /* cymbal crash */
+  [523.25,659.25,783.99,1046.50].forEach(f=>tone(f,3.80,1.30,"sawtooth",.07));  /* C major */
+  tone(130.81,3.80,1.35,"triangle",.14);                            /* root        */
+}
+
+/* ═══════════════ SPEECH ═══════════════ */
+let voices = [];
+function loadVoices(){
+  if(!("speechSynthesis" in window)) return;
+  const all = speechSynthesis.getVoices() || [];
+  const us = all.filter(v=>/^en[-_]US/i.test(v.lang));   /* prefer American English voices */
+  const en = all.filter(v=>/^en/i.test(v.lang));
+  voices = us.length ? us : (en.length ? en : all);
+  const sel = $("voiceSel");
+  sel.innerHTML = "";
+  voices.forEach((v,i)=>{
+    const o = document.createElement("option");
+    o.value = i; o.textContent = v.name.replace(/\s*\(.*\)\s*/," ").trim() + " · " + v.lang;
+    sel.appendChild(o);
+  });
+  if(!voices.length){ const o=document.createElement("option"); o.textContent="Default voice"; sel.appendChild(o); }
+  fitBW(0);   /* voice list changes the topbar width -> re-fit the board */
+}
+function speak(txt){
+  if(!voiceOn || !("speechSynthesis" in window)) return;
+  try{
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(txt);
+    u.lang = "en-US"; u.rate = .85; u.pitch = 1;
+    const v = voices[parseInt($("voiceSel").value,10)];
+    if(v) u.voice = v;
+    speechSynthesis.speak(u);
+  }catch(e){}
+}
+if("speechSynthesis" in window){ loadVoices(); speechSynthesis.onvoiceschanged = loadVoices; }
+
+/* ═══════════════ RENDER ═══════════════ */
+function buildPlayers(){
+  playersEl.innerHTML = "";
+  TEAMS.forEach((t,i)=>{
+    const d = document.createElement("div");
+    d.className = "team"; d.dataset.i = i;
+    d.innerHTML =
+      '<div class="trow"><span class="dot" style="background:'+t.color+'"></span>' +
+      '<span class="nm">'+esc(t.name)+'</span><span class="arrow">◀</span></div>' +
+      '<div class="trow2"><span class="sc">0</span><span class="cn">🪙 0</span></div>';
+    playersEl.appendChild(d);
+  });
+}
+/* long words get a smaller clamp so they never break mid-word */
+function wordSize(en){
+  const d = en.length <= 6 ? 4.6 : en.length <= 9 ? 6 : en.length <= 13 ? 7 : 8;
+  return "clamp(12px, calc(var(--cw)/"+d+"), 34px)";
+}
+function buildBoard(){
+  boardEl.innerHTML = "";
+  deck.forEach((c,i)=>{
+    const d = document.createElement("div");
+    d.className = "card"; d.dataset.i = i;
+    d.innerHTML =
+      '<div class="card-inner">' +
+        '<div class="face back"><div class="num">'+(i+1)+'</div><div class="pick">Pick me!</div></div>' +
+        '<div class="face front">' +
+          (c.type==="word" ? '<div class="pts">⭐'+c.pts+'</div>' : '<div class="tag">'+c.emoji+'</div>') +
+          (c.type==="word"
+            ? '<div class="word" style="font-size:'+wordSize(c.en)+'">'+esc(c.en)+'</div>'
+            : '<div class="act-emoji">'+c.emoji+'</div><div class="act-name">'+esc(c.label)+'</div>') +
+          '<div class="tick">✓</div>' +
+        '</div>' +
+      '</div>';
+    boardEl.appendChild(d);
+  });
+}
+function updateScoreboard(popIdx){
+  const max = Math.max.apply(null, TEAMS.map(t=>t.score));
+  TEAMS.forEach((t,i)=>{
+    const el = playersEl.children[i];
+    el.classList.toggle("turn", i===cur && !gameOver);
+    el.classList.toggle("lag", i!==cur && t.score < max);
+    const sc = el.querySelector(".sc");
+    sc.textContent = t.score;
+    el.querySelector(".cn").textContent = "🪙 " + t.coins;
+    if(popIdx === i){ sc.classList.remove("pop"); void sc.offsetWidth; sc.classList.add("pop"); }
+  });
+}
+function setStatus(html){ $("sline").innerHTML = html; }
+const totalRounds = () => Math.ceil(deck.length / TEAMS.length);
+function turnStatus(){
+  const round = Math.min(totalRounds(), Math.floor(used / TEAMS.length) + 1);
+  setStatus('🔁 Round <b>'+round+'</b>/'+totalRounds()+' · <b>'+TEAMS[cur].name+'</b> team’s turn — click a card to flip!');
+}
+function setBar(html){ barEl.innerHTML = html; barEl.classList.add("show"); }
+function hideBar(){ barEl.classList.remove("show"); barEl.innerHTML = ""; }
+function markDone(i, isAct){
+  const el = boardEl.children[i];
+  el.classList.remove("q");
+  el.classList.add("done"); if(isAct) el.classList.add("act");
+  el.classList.add("hit"); setTimeout(()=>el.classList.remove("hit"), 450);
+}
+const isLastCard = () => used >= deck.length;
+
+/* ═══════════════ GAME FLOW ═══════════════ */
+function flip(i){
+  if(gameOver || waiting || lock) return;
+  const c = deck[i]; if(!c || c.flipped) return;
+  c.flipped = true; used++;
+  boardEl.children[i].classList.add("flipped");
+  boardEl.children[i].classList.add("q");
+  sfxClick();
+  lock = true;
+  if(isLastCard()) sfxFinalVamp();   /* end is near: start the music BEFORE the last card finishes */
+  if(c.type === "word") startWord(c, i); else doAction(c, i);
+}
+
+function startWord(c, i){
+  const wrongs = WORDS.filter(w=>w.def !== c.def).map(w=>w.def);
+  const wrong = wrongs[Math.floor(Math.random()*wrongs.length)];
+  q = { card:i, team:cur, correct:c.def, en:c.en, pts:c.pts, answered:false };
+  speak(c.en);
+  setStatus('🔊 Listen & choose: <b>'+esc(c.en)+'</b> — <b>'+TEAMS[cur].name+'</b> team');
+  setBar(
+    '<div class="barinfo">What does <b>'+esc(c.en)+'</b> mean? <span style="color:#a9c8e6">('+TEAMS[cur].name+' team)</span> <span style="color:#ffd600">⭐ '+c.pts+' pts</span></div>' +
+    '<div class="opts">' +
+      shuffle([c.def, wrong]).map(o=>'<button class="opt" data-def="'+esc(o)+'">'+esc(o)+'</button>').join("") +
+    '</div>' +
+    '<button class="hear" id="hearBtn">🔊 Hear it again</button>'
+  );
+  barEl.querySelectorAll(".opt").forEach(b=> b.onclick = ()=> answer(b));
+  $("hearBtn").onclick = ()=>{ sfxClick(); speak(c.en); };
+}
+
+function answer(btn){
+  if(!lock || !q || q.answered) return;              /* guard against double clicks */
+  q.answered = true;
+  barEl.querySelectorAll(".opt").forEach(b=>{
+    b.disabled = true;
+    if(b.dataset.def === q.correct) b.classList.add("right");
+    else if(b === btn) b.classList.add("wrong");
+  });
+  const team = TEAMS[q.team];
+  const last = isLastCard();
+  if(right(btn)){
+    team.score += q.pts; team.coins += 1;
+    markDone(q.card, false);
+    sfxCorrect();
+    updateScoreboard(q.team);
+    setStatus('✅ Correct! <b>'+team.name+'</b> +'+q.pts+' points 🪙 +1 coin');
+    /* the final card stays on screen 4 seconds before the result screen —
+       the award music starts NOW so it plays THROUGH the pause (chord 3.80s, modal 4.0s) */
+    if(last){ stopFinalVamp(); sfxFanfare(); }
+    setBar(last
+      ? '<div class="barinfo good">✅ Correct! +'+q.pts+' points 🪙 +1 coin — final card, game over shortly…</div>'
+      : '<div class="barinfo good">✅ Correct! +'+q.pts+' points 🪙 +1 coin — moving on…</div>');
+    setTimeout(nextTurn, last ? 4000 : 1400);
+  }else{
+    team.score -= 10;
+    markDone(q.card, false);
+    sfxWrong();
+    updateScoreboard(q.team);
+    waiting = true;                                   /* locked: cannot skip without Next ▶ */
+    setStatus('❌ Not quite — the correct answer is <b>“'+esc(q.correct)+'”</b>');
+    setBar('<div class="barinfo bad">❌ The correct answer is: “'+esc(q.correct)+'” — press Next ▶</div>' +
+           '<button class="next" id="nextBtn">Next ▶</button>');
+    $("nextBtn").onclick = ()=>{ sfxClick(); nextTurn(last ? 4000 : 0); };
+  }
+}
+function right(btn){ return btn.dataset.def === q.correct; }
+
+function doAction(c, i){
+  waiting = true;
+  markDone(i, true);
+  const team = TEAMS[cur];
+  const last = isLastCard();
+  const result = html => setBar('<div class="barinfo">'+html+'</div><button class="next" id="nextBtn">Next ▶</button>');
+  const finish = () => {
+    updateScoreboard();
+    const nb = $("nextBtn");
+    if(nb) nb.onclick = ()=>{ sfxClick(); nextTurn(last ? 4000 : 0); };
+  };
+
+  switch(c.kind){
+    case "first": {
+      /* 🥇 score = leader's score + 10 — always beats every other team */
+      const max = Math.max.apply(null, TEAMS.map(t=>t.score));
+      const target = max + 10;
+      if(team.score >= max){
+        team.score = target; sfxFirst();
+        setStatus('🥇 <b>'+team.name+'</b> already leads! +10 bonus');
+        result('🥇 <b>'+team.name+'</b> is already in first place → <b>+10 bonus</b> → <b>'+team.score+'</b>'); finish();
+      }else{
+        team.score = target; sfxFirst();
+        setStatus('🥇 <b>'+team.name+'</b> takes first place with '+target+' points!');
+        result('🥇 <b>'+team.name+'</b> jumps to <b>first place</b> with <b>'+target+' points</b> — <b>10 more than everyone else</b>!'); finish();
+      }
+      break;
+    }
+    case "double": {
+      /* negative scores flip positive first, then ×2 (reward cards never punish) */
+      const was = team.score;
+      team.score = Math.abs(team.score) * 2; sfxBig();
+      setStatus('⭐ <b>'+team.name+'</b>’s score doubled!');
+      result('⭐ <b>'+team.name+'</b>’s score is doubled → <b>'+team.score+'</b>' +
+             (was < 0 ? ' <span style="color:#a9c8e6">(was '+was+' → flipped positive!)</span>' : ''));
+      finish();
+      break;
+    }
+    case "triple": {
+      const was = team.score;
+      team.score = Math.abs(team.score) * 3; sfxTriple();
+      setStatus('🔺 <b>'+team.name+'</b>’s score tripled!');
+      result('🔺 <b>'+team.name+'</b>’s score is tripled → <b>'+team.score+'</b>' +
+             (was < 0 ? ' <span style="color:#a9c8e6">(was '+was+' → flipped positive!)</span>' : ''));
+      finish();
+      break;
+    }
+    case "bomb":
+      team.score = 0; sfxBomb();
+      setStatus('💣 Boom! <b>'+team.name+'</b>’s score is now 0');
+      result('💣 Boom! <b>'+team.name+'</b>’s score is now <b>0</b>'); finish();
+      break;
+    case "virus":
+      pickTeam('🦠 Which team do you infect?', cur, t=>{
+        t.score = 0; sfxVirus();
+        setStatus('🦠 <b>'+t.name+'</b> catches the virus → 0 points');
+        result('🦠 <b>'+t.name+'</b> is infected → score <b>0</b>'); finish();
+      });
+      break;
+    case "give":
+      pickTeam('🎁 To which team do you give points?', cur, t=>{
+        pickAmount(t, amt=>{
+          team.score -= amt; t.score += amt; sfxLucky();
+          setStatus('🎁 <b>'+team.name+'</b> gave '+amt+' points to <b>'+t.name+'</b> (now '+team.name+' '+team.score+', '+t.name+' '+t.score+')');
+          result('🎁 <b>'+team.name+'</b> gives <b>'+amt+' points</b> to <b>'+t.name+'</b> → '+team.name+' <b>'+team.score+'</b>, '+t.name+' <b>'+t.score+'</b>'); finish();
+        });
+      });
+      break;
+    case "steal":
+      pickTeam('🐴 Which team do you steal from?', cur, t=>{
+        pickStealAmount(t, amt=>{
+          t.score -= amt; team.score += amt; sfxSteal();
+          setStatus('🐴 <b>'+team.name+'</b> stole '+amt+' points from <b>'+t.name+'</b> (now '+t.name+' '+t.score+')');
+          result('🐴 <b>'+team.name+'</b> steals <b>'+amt+' points</b> from <b>'+t.name+'</b> → '+t.name+' <b>'+t.score+'</b>'); finish();
+        });
+      });
+      break;
+    case "swap":
+      pickTeam('🔄 Which team do you swap scores with?', cur, t=>{
+        const tmp = t.score; t.score = team.score; team.score = tmp; sfxClick();
+        setStatus('🔄 Scores swapped: <b>'+team.name+'</b> ↔ <b>'+t.name+'</b>');
+        result('🔄 Scores swapped! <b>'+team.name+'</b> ↔ <b>'+t.name+'</b>'); finish();
+      });
+      break;
+  }
+}
+
+function pickTeam(title, exclude, cb){
+  setStatus(title);
+  setBar('<div class="barinfo">'+esc(title)+'</div><div class="picker">' +
+    TEAMS.map((t,i)=>'<button class="pbtn" data-t="'+i+'" style="background:'+t.color+'"' +
+      (i===exclude?' disabled title="That is your team"':'')+'>'+esc(t.name)+'</button>').join("") +
+    '</div>');
+  barEl.querySelectorAll(".pbtn").forEach(b=>{
+    if(b.disabled) return;
+    b.onclick = ()=>{ sfxClick(); cb(TEAMS[parseInt(b.dataset.t,10)]); };
+  });
+}
+function pickAmount(t, cb){
+  setStatus('🎁 How many points for <b>'+t.name+'</b>?');
+  setBar('<div class="barinfo">🎁 Give <b>'+esc(t.name)+'</b> how many points? <span style="color:#a9c8e6">(comes out of your score)</span></div><div class="picker">' +
+    [10,20,50].map(a=>'<button class="pbtn" data-a="'+a+'" style="background:#1769aa">+'+a+'</button>').join("") +
+    '</div>');
+  barEl.querySelectorAll(".pbtn").forEach(b=>{
+    b.onclick = ()=>{ sfxClick(); cb(parseInt(b.dataset.a,10)); };
+  });
+}
+/* steal: no cap — the victim may drop below 0 (fair play, negative scores allowed) */
+function pickStealAmount(t, cb){
+  const FIXED = [10,20,30,50];
+  const opts = FIXED.slice();
+  if(t.score > 0 && opts.indexOf(t.score) < 0) opts.push(t.score);        /* "All" when they have a positive odd total */
+  const isAll = a => (a===t.score && FIXED.indexOf(a) < 0);
+  setStatus('🐴 How many points to steal from <b>'+t.name+'</b>?');
+  setBar('<div class="barinfo">🐴 Steal how many points from <b>'+esc(t.name)+'</b>? — they have <b>'+t.score+'</b></div><div class="picker">' +
+    opts.map(a=>'<button class="pbtn" data-a="'+a+'" style="background:#1769aa">'+
+      (isAll(a) ? 'All ('+a+')' : a)+'</button>').join("") +
+    '</div>');
+  barEl.querySelectorAll(".pbtn").forEach(b=>{
+    b.onclick = ()=>{ sfxClick(); cb(parseInt(b.dataset.a,10)); };
+  });
+}
+
+/* endDelay: 4000 keeps the last card (and its answer feedback) visible before the result screen */
+function nextTurn(endDelay){
+  lock = false; waiting = false; q = null;
+  if(isLastCard()){
+    setStatus('🏁 Final card! Game over in a moment…');
+    hideBar();                    // never leave a Next button up: re-pressing would queue extra end-game timers
+    if(endTimer) clearTimeout(endTimer);
+    /* the 4s pause IS the "game over" cue: start the award music now (once), it lands on the reveal */
+    if(!endTimer && !gameOver){ stopFinalVamp(); sfxFanfare(); }
+    endTimer = setTimeout(function(){ endTimer = null; endGame(); }, endDelay || 0);
+    return;
+  }
+  hideBar();
+  cur = (cur + 1) % TEAMS.length;
+  updateScoreboard();
+  turnStatus();
+}
+
+/* ═══════════════ END / MODAL ═══════════════ */
+function endGame(){
+  if(gameOver) return;          /* guard: never run twice */
+  gameOver = true;
+  updateScoreboard();
+  const ranked = TEAMS.map((t,i)=>({t:t,i:i})).sort((a,b)=> (b.t.score-a.t.score) || (b.t.coins-a.t.coins));
+  $("winnerLine").textContent = "Winner: " + ranked[0].t.name + " Team!";
+  $("winnerSub").textContent = "Game over · " + THEME + " · all " + deck.length + " cards used";
+  $("rankList").innerHTML = ranked.map((r,k)=>
+    '<div class="rank"><span class="medal">'+MEDALS[k]+'</span>' +
+    '<span class="rdot" style="background:'+r.t.color+'"></span>' +
+    '<span class="rname">'+esc(r.t.name)+'</span>' +
+    '<span class="rscore">'+r.t.score+' pts</span>' +
+    '<span class="rcoin">🪙 '+r.t.coins+'</span></div>').join("");
+  modalEl.classList.add("show");
+  setStatus('🏆 Game over! <b>'+ranked[0].t.name+'</b> team wins with <b>'+ranked[0].t.score+'</b> points!');
+  speak("Game over! " + ranked[0].t.name + " team wins!");
+}
+
+/* ═══════════════ FIT: board must never hide under the fixed answer bar ═══════════════ */
+function fitBW(iter){
+  iter = iter || 0;
+  const board = document.querySelector(".board");
+  if(!board) return;
+  const cs = getComputedStyle(board);
+  const cols = Math.max(1, cs.gridTemplateColumns.split(/\s+/).filter(s=>s && s!=="none").length);
+  const rows = Math.max(1, Math.ceil((deck.length || 15) / cols));
+  const gap  = parseFloat(cs.gap) || 10;
+  const above  = board.offsetTop;                                  /* topbar + scoreboard + status */
+  const reserve = window.innerWidth <= 900 ? 225 : 180;            /* tallest answer-bar state + safety */
+  const avail = window.innerHeight - above - reserve - 4;          /* room left for the board */
+  /* boardH = rows * 0.75 * cardW + (rows-1)*gap  <=  avail  ->  solve for board width */
+  const bwFromH = ((avail - (rows-1)*gap) * cols) / (0.75 * rows) + (cols-1)*gap;
+  const bwMax = Math.min(1560, document.documentElement.clientWidth - 16);
+  const bw = Math.max(320, Math.min(bwMax, bwFromH));
+  const cw = (bw - (cols-1)*gap) / cols;
+  const root = document.documentElement.style;
+  const prevBw = root.getPropertyValue("--bw");
+  const nextBw = Math.round(bw) + "px";
+  root.setProperty("--bw", nextBw);
+  root.setProperty("--cw", Math.round(cw) + "px");
+  root.setProperty("--reserve", reserve + "px");
+  /* the chrome above the board can change after this run (voice list loads later,
+     topbar re-wraps): re-measure until settled. Hard cap = no endless loop. */
+  const nowAbove = board.offsetTop;                                /* forces reflow */
+  if(iter < 6 && (prevBw !== nextBw || Math.abs(nowAbove - above) >= 1)){
+    requestAnimationFrame(()=>fitBW(iter + 1));
+  }
+}
+/* long titles: shrink the brand font until it fits on the one-line topbar */
+function fitBrand(){
+  const b = document.querySelector(".brand");
+  if(!b) return;
+  b.style.fontSize = "";
+  const base = parseFloat(getComputedStyle(b).fontSize) || 21;
+  let size = base;
+  while(b.scrollWidth > b.clientWidth && size > 10){
+    size -= 1;
+    b.style.fontSize = size + "px";
+  }
+}
+window.addEventListener("resize", ()=>{ fitBW(0); fitBrand(); });
+window.addEventListener("load", ()=>{ fitBW(0); fitBrand(); });
+
+/* ═══════════════ RESET / CONTROLS ═══════════════ */
+function reset(){
+  /* every word card is worth 10/15/20/25/30 — all five values always appear */
+  const PTS = [10,15,20,25,30];
+  const ptsPool = shuffle(PTS.slice()).concat([
+    PTS[Math.floor(Math.random()*PTS.length)],
+    PTS[Math.floor(Math.random()*PTS.length)]
+  ]);
+  deck = shuffle(
+    WORDS.map((w,i)=>({type:"word", en:w.en, def:w.def, pts:ptsPool[i]}))            /* 7 word cards */
+      .concat(ACTIONS.map(a=>({type:"action", kind:a.kind, emoji:a.emoji, label:a.label})))  /* 8 action cards */
+  );
+  TEAMS.forEach(t=>{ t.score = 0; t.coins = 0; });
+  if(endTimer){ clearTimeout(endTimer); endTimer = null; }
+  stopFinalVamp(); fanfareStarted = false;
+  cur = 0; used = 0; lock = false; waiting = false; gameOver = false; q = null;
+  modalEl.classList.remove("show");
+  hideBar();
+  buildBoard(); buildPlayers(); updateScoreboard(); turnStatus();
+  fitBW(); fitBrand();
+}
+
+boardEl.addEventListener("click", e=>{
+  const el = e.target.closest(".card");
+  if(!el) return;
+  flip(parseInt(el.dataset.i, 10));
+});
+$("btnRestart").onclick = ()=>{
+  sfxClick();
+  if(window.confirm("Restart the game? All scores will be cleared.")) reset();
+};
+$("btnSound").onclick = ()=>{
+  soundOn = !soundOn; ac();
+  const b = $("btnSound");
+  b.textContent = "🔊 Sound: " + (soundOn ? "ON" : "OFF");
+  b.classList.toggle("off", !soundOn);
+  if(soundOn) sfxClick();
+};
+$("btnVoice").onclick = ()=>{
+  voiceOn = !voiceOn;
+  if(!voiceOn && "speechSynthesis" in window) speechSynthesis.cancel();
+  const b = $("btnVoice");
+  b.textContent = "🗣 Voice: " + (voiceOn ? "ON" : "OFF");
+  b.classList.toggle("off", !voiceOn);
+  sfxClick();
+};
+$("voiceSel").onchange = ()=>{ sfxClick(); speak(WORDS[0].en); };
+$("btnAgain").onclick = ()=>{ sfxClick(); reset(); };
+$("btnExit").onclick = ()=>{ sfxClick(); modalEl.classList.remove("show"); };
+document.addEventListener("keydown", e=>{
+  if((e.key === "Enter" || e.key === " ") && waiting){
+    const nb = $("nextBtn");
+    if(nb){ e.preventDefault(); sfxClick(); nextTurn(isLastCard() ? 4000 : 0); }
+  }
+});
+
+$("themeName").textContent = THEME;
+document.title = "BaaBoozle · " + THEME;
+reset();
+</script>
+</body>
+</html>
